@@ -90,6 +90,9 @@ msgstr "Emoticon :-)"
 msgid "Karma"
 msgstr "Karma"
 
+msgid "Relationship map"
+msgstr "Mappa delle relazioni"
+
 msgid "Most referenced URLs"
 msgstr "URL più referenziati"
 

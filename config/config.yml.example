@@ -132,6 +132,8 @@ pisg:
   ShowKarma: true              # karma leaderboard (nick++ / nick--)
   KarmaHistory: 10             # max nicks shown in karma table
   ShowMru: true                # most referenced URLs (pisg: ShowMru)
+  ShowRelationMap: true          # interactive nick relationship graph
+  RelationMapMinCount: 2         # minimum interactions to show an edge
   ShowLegend: true             # page legend/footer (pisg: ShowLegend)
 
   # History limits

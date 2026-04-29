@@ -267,6 +267,16 @@ def init_db():
             PRIMARY KEY (network, channel, mentioned)
         );
 
+        -- Pairwise nick interactions (for relationship map)
+        CREATE TABLE IF NOT EXISTS nick_interactions (
+            network     TEXT NOT NULL,
+            channel     TEXT NOT NULL COLLATE NOCASE,
+            source      TEXT NOT NULL COLLATE NOCASE,
+            target      TEXT NOT NULL COLLATE NOCASE,
+            count       INTEGER DEFAULT 1,
+            PRIMARY KEY (network, channel, source, target)
+        );
+
         CREATE TABLE IF NOT EXISTS karma (
             network     TEXT NOT NULL,
             channel     TEXT NOT NULL COLLATE NOCASE,
@@ -1213,6 +1223,28 @@ def incr_nick_ref(network: str, channel: str, mentioned: str, by_nick: str):
             (network, channel, mentioned, by_nick)
         )
 
+def incr_nick_interaction(network: str, channel: str, source: str, target: str):
+    """Track a pairwise interaction: source mentioned target."""
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO nick_interactions(network,channel,source,target,count) VALUES(?,?,?,?,1)
+               ON CONFLICT(network,channel,source,target) DO UPDATE SET count=count+1""",
+            (network, channel, source, target)
+        )
+
+
+def get_nick_interactions(network: str, channel: str, min_count: int = 2,
+                          limit: int = 100) -> List[Dict]:
+    """Return pairwise interaction edges for the relationship map."""
+    with get_conn() as conn:
+        rows = conn.execute("""
+            SELECT source, target, count FROM nick_interactions
+            WHERE network=? AND channel=? AND count>=?
+            ORDER BY count DESC LIMIT ?
+        """, (network, channel, min_count, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+
 def get_top_nick_refs(network: str, channel: str, limit: int = 10) -> List[Dict]:
     with get_conn() as conn:
         rows = conn.execute("""
@@ -1388,6 +1420,7 @@ def delete_network(name: str) -> None:
         conn.execute("DELETE FROM hourly_users WHERE network=?", (name,))
         conn.execute("DELETE FROM peaks WHERE network=?", (name,))
         conn.execute("DELETE FROM nick_refs WHERE network=?", (name,))
+        conn.execute("DELETE FROM nick_interactions WHERE network=?", (name,))
         conn.execute("DELETE FROM smiley_freq WHERE network=?", (name,))
         conn.execute("DELETE FROM karma WHERE network=?", (name,))
         conn.execute("DELETE FROM chanlog WHERE network=?", (name,))
@@ -1449,6 +1482,8 @@ def delete_channel(network: str, channel: str) -> None:
         conn.execute("DELETE FROM peaks WHERE network=? AND channel=?",
                      (network, channel))
         conn.execute("DELETE FROM nick_refs WHERE network=? AND channel=?",
+                     (network, channel))
+        conn.execute("DELETE FROM nick_interactions WHERE network=? AND channel=?",
                      (network, channel))
         conn.execute("DELETE FROM smiley_freq WHERE nick_id IN "
                      "(SELECT id FROM nicks WHERE network=? AND channel=?)",

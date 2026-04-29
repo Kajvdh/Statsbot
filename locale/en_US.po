@@ -91,6 +91,9 @@ msgstr ""
 msgid "Karma"
 msgstr ""
 
+msgid "Relationship map"
+msgstr ""
+
 msgid "Most referenced URLs"
 msgstr ""
 
