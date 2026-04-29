@@ -281,6 +281,56 @@ sudo systemctl enable --now statsbot
 sudo journalctl -u statsbot -f
 ```
 
+### Docker Compose
+
+A pre-built multi-arch image (amd64 + arm64) is published to GitHub
+Container Registry on every push to `main`.
+
+**1. Create a project directory:**
+
+```bash
+mkdir statsbot && cd statsbot
+mkdir -p config data
+```
+
+**2. Add your configuration** — copy and edit the example config:
+
+```bash
+curl -o config/config.yml https://raw.githubusercontent.com/TehPeGaSuS/Statsbot/main/config/config.yml.example
+nano config/config.yml   # set your networks, channels, nick
+```
+
+**3. Create `docker-compose.yml`:**
+
+```yaml
+services:
+  statsbot:
+    image: ghcr.io/tehpegasus/statsbot:main
+    container_name: statsbot
+    restart: unless-stopped
+    ports:
+      - "8033:8033"
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+```
+
+**4. Set up master passwords and start:**
+
+```bash
+# Interactive setup wizard (run once)
+docker compose run --rm statsbot --setup
+
+# Start in the background
+docker compose up -d
+
+# View logs
+docker compose logs -f
+```
+
+The dashboard is at `http://localhost:8033/`. The `data/` volume persists
+the SQLite database and logs across container restarts.
+
 ---
 
 ## Project structure
