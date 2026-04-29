@@ -130,7 +130,7 @@ class Sensors:
                 incr_word(nick_id, self.network, channel, word, nick=nick)
 
         # Nick reference tracking — uses a cached nick list (refreshed every 5 min)
-        from database.models import get_conn as _gc, incr_nick_ref
+        from database.models import get_conn as _gc, incr_nick_ref, incr_nick_interaction
         from bot.parser import find_nick_refs
         import time as _time
         _cache_key = (self.network, channel)
@@ -148,6 +148,7 @@ class Sensors:
         for mentioned in find_nick_refs(text, _known):
             if mentioned.lower() != nick.lower():
                 incr_nick_ref(self.network, channel, mentioned, nick)
+                incr_nick_interaction(self.network, channel, nick, mentioned)
 
         # Karma tracking — detect nick++ / nick-- (suffix only).
         # Rule: strip exactly the last two chars (++ or --) from the token;

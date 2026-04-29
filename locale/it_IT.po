@@ -86,6 +86,9 @@ msgstr "Emoticon :-)"
 msgid "section_karma"
 msgstr "Karma"
 
+msgid "section_relation_map"
+msgstr "Mappa delle relazioni"
+
 msgid "section_most_ref_urls"
 msgstr "URL più referenziati"
 

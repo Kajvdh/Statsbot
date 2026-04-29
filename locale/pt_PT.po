@@ -86,6 +86,9 @@ msgstr "Smileys :-)"
 msgid "section_karma"
 msgstr "Karma"
 
+msgid "section_relation_map"
+msgstr "Mapa de relações"
+
 msgid "section_most_ref_urls"
 msgstr "URLs mais referenciados"
 

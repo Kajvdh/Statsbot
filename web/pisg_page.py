@@ -57,7 +57,8 @@ def build_page(network: str, channel: str, period: int, config: dict) -> str:
         get_recent_topics, get_peak, count_users, get_conn,
         get_top_smileys, get_top_nick_refs, get_quote_for_nick,
         get_random_quote, get_example,
-        get_karma_top, get_karma_bottom
+        get_karma_top, get_karma_bottom,
+        get_nick_interactions
     )
 
     pisg = config.get("pisg", {})
@@ -84,6 +85,7 @@ def build_page(network: str, channel: str, period: int, config: dict) -> str:
     nick_refs    = get_top_nick_refs(network, channel, pisg.get("NickHistory", 5)) if pisg.get("ShowMrn", True) else []
     karma_top    = get_karma_top(network, channel, pisg.get("KarmaHistory", 10)) if pisg.get("ShowKarma", True) else []
     karma_bottom = get_karma_bottom(network, channel, 5) if pisg.get("ShowKarma", True) else []
+    interactions = get_nick_interactions(network, channel, pisg.get("RelationMapMinCount", 2)) if pisg.get("ShowRelationMap", True) else []
 
     # Per-nick hourly band totals (used by ShowTime and ShowMostActiveByHour)
     _bands_def = [(0,5), (6,11), (12,17), (18,23)]
@@ -840,6 +842,147 @@ b {{ color: var(--cyan); }}
                   f'<td class="nick-name">{r["nick"]}</td>'
                   f'<td class="val" style="color:var(--red)">{score}</td></tr>')
         h('</tbody></table></div>')
+
+    # ── Relationship map ─────────────────────────────────────────────────────
+    if pisg.get("ShowRelationMap", True) and interactions:
+        section(t("section_relation_map", lang))
+        h(f'<canvas id="relationMap" style="width:100%;height:480px;background:var(--bg2);'
+          f'border:1px solid var(--border);border-radius:8px;cursor:grab"></canvas>')
+        h(f'<script>!function(){{')
+        h(f'var edges={json.dumps(interactions)};')
+        h(f'var canvas=document.getElementById("relationMap");')
+        h(f'var ctx=canvas.getContext("2d");')
+        h("""
+var dpr=window.devicePixelRatio||1;
+function resize(){
+  var r=canvas.getBoundingClientRect();
+  canvas.width=r.width*dpr;canvas.height=r.height*dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+resize();window.addEventListener("resize",resize);
+var W=()=>canvas.width/dpr, H=()=>canvas.height/dpr;
+
+// Build nodes from edges
+var nodeSet={};
+edges.forEach(function(e){nodeSet[e.source]=1;nodeSet[e.target]=1;});
+var names=Object.keys(nodeSet);
+var nodes=names.map(function(n,i){
+  var a=2*Math.PI*i/names.length, r=Math.min(W(),H())*0.3;
+  return{name:n,x:W()/2+r*Math.cos(a),y:H()/2+r*Math.sin(a),vx:0,vy:0};
+});
+var idx={};nodes.forEach(function(n,i){idx[n.name.toLowerCase()]=i;});
+
+var maxC=1;edges.forEach(function(e){if(e.count>maxC)maxC=e.count;});
+
+// Assign stable colours per edge
+var palette=["#f7768e","#9ece6a","#7aa2f7","#e0af68","#bb9af7",
+  "#7dcfff","#ff9e64","#73daca","#c0caf5","#f7768e"];
+edges.forEach(function(e,i){e._color=palette[i%palette.length];});
+
+// Force simulation
+function tick(){
+  var i,j,n1,n2,dx,dy,d,f;
+  // Repulsion between all nodes
+  for(i=0;i<nodes.length;i++){
+    for(j=i+1;j<nodes.length;j++){
+      n1=nodes[i];n2=nodes[j];
+      dx=n1.x-n2.x;dy=n1.y-n2.y;
+      d=Math.sqrt(dx*dx+dy*dy)||1;
+      f=800/(d*d);
+      n1.vx+=dx/d*f;n1.vy+=dy/d*f;
+      n2.vx-=dx/d*f;n2.vy-=dy/d*f;
+    }
+  }
+  // Attraction along edges
+  edges.forEach(function(e){
+    var si=idx[e.source.toLowerCase()],ti=idx[e.target.toLowerCase()];
+    if(si===undefined||ti===undefined)return;
+    n1=nodes[si];n2=nodes[ti];
+    dx=n2.x-n1.x;dy=n2.y-n1.y;
+    d=Math.sqrt(dx*dx+dy*dy)||1;
+    f=(d-120)*0.005*Math.sqrt(e.count);
+    n1.vx+=dx/d*f;n1.vy+=dy/d*f;
+    n2.vx-=dx/d*f;n2.vy-=dy/d*f;
+  });
+  // Center gravity
+  nodes.forEach(function(n){
+    n.vx+=(W()/2-n.x)*0.001;
+    n.vy+=(H()/2-n.y)*0.001;
+    n.vx*=0.85;n.vy*=0.85;
+    n.x+=n.vx;n.y+=n.vy;
+    n.x=Math.max(40,Math.min(W()-40,n.x));
+    n.y=Math.max(20,Math.min(H()-20,n.y));
+  });
+}
+
+function draw(){
+  ctx.clearRect(0,0,W(),H());
+  // Edges
+  edges.forEach(function(e){
+    var si=idx[e.source.toLowerCase()],ti=idx[e.target.toLowerCase()];
+    if(si===undefined||ti===undefined)return;
+    var n1=nodes[si],n2=nodes[ti];
+    ctx.beginPath();ctx.moveTo(n1.x,n1.y);ctx.lineTo(n2.x,n2.y);
+    ctx.strokeStyle=e._color;
+    ctx.lineWidth=Math.max(1,Math.min(6,e.count/maxC*6));
+    ctx.globalAlpha=0.7;ctx.stroke();ctx.globalAlpha=1;
+  });
+  // Nodes
+  var cs=getComputedStyle(document.body);
+  var textCol=cs.getPropertyValue("--text").trim();
+  var bgCol=cs.getPropertyValue("--bg2").trim();
+  var borderCol=cs.getPropertyValue("--border").trim();
+  ctx.font="12px 'Segoe UI',Tahoma,sans-serif";
+  nodes.forEach(function(n){
+    var w=ctx.measureText(n.name).width+10;
+    ctx.fillStyle=bgCol;ctx.strokeStyle=borderCol;ctx.lineWidth=1;
+    ctx.beginPath();ctx.roundRect(n.x-w/2,n.y-9,w,18,3);ctx.fill();ctx.stroke();
+    ctx.fillStyle=textCol;ctx.textAlign="center";ctx.textBaseline="middle";
+    ctx.fillText(n.name,n.x,n.y);
+  });
+}
+
+// Drag support
+var dragging=null,dragOff={x:0,y:0};
+function getPos(ev){var r=canvas.getBoundingClientRect();return{x:ev.clientX-r.left,y:ev.clientY-r.top};}
+function hitNode(p){
+  for(var i=0;i<nodes.length;i++){
+    var n=nodes[i],w=ctx.measureText(n.name).width+10;
+    if(p.x>=n.x-w/2&&p.x<=n.x+w/2&&p.y>=n.y-9&&p.y<=n.y+9)return i;
+  }return-1;
+}
+canvas.addEventListener("mousedown",function(ev){
+  var p=getPos(ev),i=hitNode(p);
+  if(i>=0){dragging=i;dragOff.x=nodes[i].x-p.x;dragOff.y=nodes[i].y-p.y;canvas.style.cursor="grabbing";}
+});
+canvas.addEventListener("mousemove",function(ev){
+  if(dragging!==null){var p=getPos(ev);nodes[dragging].x=p.x+dragOff.x;nodes[dragging].y=p.y+dragOff.y;nodes[dragging].vx=0;nodes[dragging].vy=0;}
+  else{var p2=getPos(ev);canvas.style.cursor=hitNode(p2)>=0?"pointer":"grab";}
+});
+canvas.addEventListener("mouseup",function(){dragging=null;canvas.style.cursor="grab";});
+canvas.addEventListener("mouseleave",function(){dragging=null;canvas.style.cursor="grab";});
+
+// Touch support
+canvas.addEventListener("touchstart",function(ev){
+  ev.preventDefault();var t=ev.touches[0],p=getPos(t),i=hitNode(p);
+  if(i>=0){dragging=i;dragOff.x=nodes[i].x-p.x;dragOff.y=nodes[i].y-p.y;}
+},{passive:false});
+canvas.addEventListener("touchmove",function(ev){
+  ev.preventDefault();if(dragging!==null){var t=ev.touches[0],p=getPos(t);nodes[dragging].x=p.x+dragOff.x;nodes[dragging].y=p.y+dragOff.y;nodes[dragging].vx=0;nodes[dragging].vy=0;}
+},{passive:false});
+canvas.addEventListener("touchend",function(){dragging=null;});
+
+// Animation loop
+var frame=0;
+function loop(){
+  if(dragging===null)tick();
+  draw();
+  if(++frame<300||dragging!==null)requestAnimationFrame(loop);
+  else setTimeout(loop,200);
+}
+loop();
+""")
+        h('}();</script>')
 
     # ── Most referenced URLs ──────────────────────────────────────────────────
     if pisg.get("ShowMru", True) and recent_urls:
