@@ -958,27 +958,39 @@ function resize(){
 resize();window.addEventListener("resize",resize);
 var W=()=>canvas.width/dpr, H=()=>canvas.height/dpr;
 
+// Assign a unique colour to each nick
+var palette=["#f7768e","#9ece6a","#7aa2f7","#e0af68","#bb9af7",
+  "#7dcfff","#ff9e64","#73daca","#c53b53","#41a6b5",
+  "#d18616","#6183bb","#a9b1d6","#56b6c2","#c678dd"];
+
 // Build nodes from edges
 var nodeSet={};
 edges.forEach(function(e){nodeSet[e.source]=1;nodeSet[e.target]=1;});
 var names=Object.keys(nodeSet);
 var nodes=names.map(function(n,i){
   var a=2*Math.PI*i/names.length, r=Math.min(W(),H())*0.3;
-  return{name:n,x:W()/2+r*Math.cos(a),y:H()/2+r*Math.sin(a),vx:0,vy:0};
+  return{name:n,x:W()/2+r*Math.cos(a),y:H()/2+r*Math.sin(a),vx:0,vy:0,
+         color:palette[i%palette.length]};
 });
 var idx={};nodes.forEach(function(n,i){idx[n.name.toLowerCase()]=i;});
 
-var maxC=1;edges.forEach(function(e){if(e.count>maxC)maxC=e.count;});
-
-// Assign stable colours per edge
-var palette=["#f7768e","#9ece6a","#7aa2f7","#e0af68","#bb9af7",
-  "#7dcfff","#ff9e64","#73daca","#c0caf5","#f7768e"];
-edges.forEach(function(e,i){e._color=palette[i%palette.length];});
+// Merge directional edges into bidirectional pairs:
+// {key: {a, b, aToB, bToA, total}}
+var pairMap={};
+edges.forEach(function(e){
+  var sL=e.source.toLowerCase(), tL=e.target.toLowerCase();
+  var key=sL<tL?sL+"|"+tL:tL+"|"+sL;
+  if(!pairMap[key]) pairMap[key]={a:sL<tL?e.source:e.target, b:sL<tL?e.target:e.source, aToB:0, bToA:0, total:0};
+  var p=pairMap[key];
+  if(sL===p.a.toLowerCase()) p.aToB+=e.count; else p.bToA+=e.count;
+  p.total=p.aToB+p.bToA;
+});
+var pairs=Object.values(pairMap);
+var maxC=1;pairs.forEach(function(p){if(p.total>maxC)maxC=p.total;});
 
 // Force simulation
 function tick(){
   var i,j,n1,n2,dx,dy,d,f;
-  // Repulsion between all nodes
   for(i=0;i<nodes.length;i++){
     for(j=i+1;j<nodes.length;j++){
       n1=nodes[i];n2=nodes[j];
@@ -989,18 +1001,16 @@ function tick(){
       n2.vx-=dx/d*f;n2.vy-=dy/d*f;
     }
   }
-  // Attraction along edges
-  edges.forEach(function(e){
-    var si=idx[e.source.toLowerCase()],ti=idx[e.target.toLowerCase()];
-    if(si===undefined||ti===undefined)return;
-    n1=nodes[si];n2=nodes[ti];
+  pairs.forEach(function(p){
+    var ai=idx[p.a.toLowerCase()],bi=idx[p.b.toLowerCase()];
+    if(ai===undefined||bi===undefined)return;
+    n1=nodes[ai];n2=nodes[bi];
     dx=n2.x-n1.x;dy=n2.y-n1.y;
     d=Math.sqrt(dx*dx+dy*dy)||1;
-    f=(d-120)*0.005*Math.sqrt(e.count);
+    f=(d-120)*0.005*Math.sqrt(p.total);
     n1.vx+=dx/d*f;n1.vy+=dy/d*f;
     n2.vx-=dx/d*f;n2.vy-=dy/d*f;
   });
-  // Center gravity
   nodes.forEach(function(n){
     n.vx+=(W()/2-n.x)*0.001;
     n.vy+=(H()/2-n.y)*0.001;
@@ -1013,28 +1023,43 @@ function tick(){
 
 function draw(){
   ctx.clearRect(0,0,W(),H());
-  // Edges
-  edges.forEach(function(e){
-    var si=idx[e.source.toLowerCase()],ti=idx[e.target.toLowerCase()];
-    if(si===undefined||ti===undefined)return;
-    var n1=nodes[si],n2=nodes[ti];
-    ctx.beginPath();ctx.moveTo(n1.x,n1.y);ctx.lineTo(n2.x,n2.y);
-    ctx.strokeStyle=e._color;
-    ctx.lineWidth=Math.max(1,Math.min(6,e.count/maxC*6));
-    ctx.globalAlpha=0.7;ctx.stroke();ctx.globalAlpha=1;
+  // Edges — gradient from source colour to target colour,
+  // midpoint shifted by who mentions whom more
+  pairs.forEach(function(p){
+    var ai=idx[p.a.toLowerCase()],bi=idx[p.b.toLowerCase()];
+    if(ai===undefined||bi===undefined)return;
+    var nA=nodes[ai],nB=nodes[bi];
+    // Gradient stop: ratio of aToB / total shifts midpoint toward B
+    // (A's colour extends further when A mentions B more)
+    var ratio=p.total>0?p.aToB/p.total:0.5;
+    var grad=ctx.createLinearGradient(nA.x,nA.y,nB.x,nB.y);
+    grad.addColorStop(0,nA.color);
+    grad.addColorStop(ratio,nA.color);
+    grad.addColorStop(ratio,nB.color);
+    grad.addColorStop(1,nB.color);
+    ctx.beginPath();ctx.moveTo(nA.x,nA.y);ctx.lineTo(nB.x,nB.y);
+    ctx.strokeStyle=grad;
+    ctx.lineWidth=Math.max(1.5,Math.min(8,p.total/maxC*8));
+    ctx.globalAlpha=0.8;ctx.stroke();ctx.globalAlpha=1;
   });
-  // Nodes
+  // Nodes — small dot + label box
   var cs=getComputedStyle(document.body);
   var textCol=cs.getPropertyValue("--text").trim();
   var bgCol=cs.getPropertyValue("--bg2").trim();
   var borderCol=cs.getPropertyValue("--border").trim();
   ctx.font="12px 'Segoe UI',Tahoma,sans-serif";
   nodes.forEach(function(n){
+    // Dot at node position
+    ctx.beginPath();ctx.arc(n.x,n.y,4,0,Math.PI*2);
+    ctx.fillStyle=n.color;ctx.fill();
+    ctx.strokeStyle=borderCol;ctx.lineWidth=1;ctx.stroke();
+    // Label box
     var w=ctx.measureText(n.name).width+10;
+    var lx=n.x-w/2, ly=n.y-22;
     ctx.fillStyle=bgCol;ctx.strokeStyle=borderCol;ctx.lineWidth=1;
-    ctx.beginPath();ctx.roundRect(n.x-w/2,n.y-9,w,18,3);ctx.fill();ctx.stroke();
+    ctx.beginPath();ctx.roundRect(lx,ly,w,16,3);ctx.fill();ctx.stroke();
     ctx.fillStyle=textCol;ctx.textAlign="center";ctx.textBaseline="middle";
-    ctx.fillText(n.name,n.x,n.y);
+    ctx.fillText(n.name,n.x,ly+8);
   });
 }
 
@@ -1044,7 +1069,7 @@ function getPos(ev){var r=canvas.getBoundingClientRect();return{x:ev.clientX-r.l
 function hitNode(p){
   for(var i=0;i<nodes.length;i++){
     var n=nodes[i],w=ctx.measureText(n.name).width+10;
-    if(p.x>=n.x-w/2&&p.x<=n.x+w/2&&p.y>=n.y-9&&p.y<=n.y+9)return i;
+    if(p.x>=n.x-w/2&&p.x<=n.x+w/2&&p.y>=n.y-22&&p.y<=n.y+4)return i;
   }return-1;
 }
 canvas.addEventListener("mousedown",function(ev){
