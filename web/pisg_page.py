@@ -1051,39 +1051,58 @@ function tick(){
   });
 }
 
+// Cache theme colours (re-read only on theme toggle)
+var cs=getComputedStyle(document.body);
+var textCol=cs.getPropertyValue("--text").trim();
+var bgCol=cs.getPropertyValue("--bg2").trim();
+var borderCol=cs.getPropertyValue("--border").trim();
+var themeBtn=document.getElementById("themeToggle");
+if(themeBtn)themeBtn.addEventListener("click",function(){
+  setTimeout(function(){
+    cs=getComputedStyle(document.body);
+    textCol=cs.getPropertyValue("--text").trim();
+    bgCol=cs.getPropertyValue("--bg2").trim();
+    borderCol=cs.getPropertyValue("--border").trim();
+  },50);
+});
+
+// Pre-compute edge widths and ratios
+pairs.forEach(function(p){
+  p._w=Math.max(1.5,Math.min(8,p.total/maxC*8));
+  p._ratio=p.total>0?p.aToB/p.total:0.5;
+  p._ai=idx[p.a.toLowerCase()];p._bi=idx[p.b.toLowerCase()];
+});
+
+// Pre-measure label widths
+ctx.font="11px 'Segoe UI',Tahoma,sans-serif";
+nodes.forEach(function(n){n._lw=ctx.measureText(n.name).width+8;});
+
 function draw(){
   ctx.clearRect(0,0,W(),H());
-  // Edges — gradient with directional midpoint
+  // Edges — use simple two-segment line instead of gradient for performance
+  ctx.globalAlpha=edgeAlpha;
   pairs.forEach(function(p){
-    var ai=idx[p.a.toLowerCase()],bi=idx[p.b.toLowerCase()];
-    if(ai===undefined||bi===undefined)return;
-    var nA=nodes[ai],nB=nodes[bi];
-    var ratio=p.total>0?p.aToB/p.total:0.5;
-    var grad=ctx.createLinearGradient(nA.x,nA.y,nB.x,nB.y);
-    grad.addColorStop(0,nA.color);
-    grad.addColorStop(ratio,nA.color);
-    grad.addColorStop(ratio,nB.color);
-    grad.addColorStop(1,nB.color);
-    ctx.beginPath();ctx.moveTo(nA.x,nA.y);ctx.lineTo(nB.x,nB.y);
-    ctx.strokeStyle=grad;
-    ctx.lineWidth=Math.max(1.5,Math.min(8,p.total/maxC*8));
-    ctx.globalAlpha=edgeAlpha;ctx.stroke();ctx.globalAlpha=1;
+    if(p._ai===undefined||p._bi===undefined)return;
+    var nA=nodes[p._ai],nB=nodes[p._bi];
+    var mx=nA.x+(nB.x-nA.x)*p._ratio, my=nA.y+(nB.y-nA.y)*p._ratio;
+    ctx.lineWidth=p._w;
+    ctx.strokeStyle=nA.color;
+    ctx.beginPath();ctx.moveTo(nA.x,nA.y);ctx.lineTo(mx,my);ctx.stroke();
+    ctx.strokeStyle=nB.color;
+    ctx.beginPath();ctx.moveTo(mx,my);ctx.lineTo(nB.x,nB.y);ctx.stroke();
   });
+  ctx.globalAlpha=1;
   // Nodes — dot + label box
-  var cs=getComputedStyle(document.body);
-  var textCol=cs.getPropertyValue("--text").trim();
-  var bgCol=cs.getPropertyValue("--bg2").trim();
-  var borderCol=cs.getPropertyValue("--border").trim();
   ctx.font="11px 'Segoe UI',Tahoma,sans-serif";
+  ctx.textAlign="center";ctx.textBaseline="middle";
   nodes.forEach(function(n){
     ctx.beginPath();ctx.arc(n.x,n.y,4,0,Math.PI*2);
     ctx.fillStyle=n.color;ctx.fill();
     ctx.strokeStyle=borderCol;ctx.lineWidth=1;ctx.stroke();
-    var w=ctx.measureText(n.name).width+8;
-    var lx=n.x-w/2, ly=n.y-20;
+    var lx=n.x-n._lw/2, ly=n.y-20;
     ctx.fillStyle=bgCol;ctx.strokeStyle=borderCol;ctx.lineWidth=1;
-    ctx.beginPath();ctx.roundRect(lx,ly,w,15,3);ctx.fill();ctx.stroke();
-    ctx.fillStyle=textCol;ctx.textAlign="center";ctx.textBaseline="middle";
+    ctx.beginPath();ctx.roundRect(lx,ly,n._lw,15,3);ctx.fill();ctx.stroke();
+    ctx.fillStyle=textCol;
     ctx.fillText(n.name,n.x,ly+7.5);
   });
 }
