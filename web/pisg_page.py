@@ -956,8 +956,13 @@ b {{ color: var(--cyan); }}
 
     # ── Relationship map ─────────────────────────────────────────────────────
     if pisg.get("ShowRelationMap", True) and interactions:
+        # Scale canvas height with node count
+        _rm_nodes = set()
+        for _e in interactions:
+            _rm_nodes.add(_e["source"]); _rm_nodes.add(_e["target"])
+        _rm_height = max(400, min(900, len(_rm_nodes) * 28))
         section(t("Relationship map", lang))
-        h(f'<canvas id="relationMap" style="width:100%;height:480px;background:var(--bg2);'
+        h(f'<canvas id="relationMap" style="width:100%;height:{_rm_height}px;background:var(--bg2);'
           f'border:1px solid var(--border);border-radius:8px;cursor:grab"></canvas>')
         h(f'<script>!function(){{')
         h(f'var edges={json.dumps(interactions)};')
@@ -982,12 +987,14 @@ var palette=["#f7768e","#9ece6a","#7aa2f7","#e0af68","#bb9af7",
 var nodeSet={};
 edges.forEach(function(e){nodeSet[e.source]=1;nodeSet[e.target]=1;});
 var names=Object.keys(nodeSet);
+var PAD=60;
 var nodes=names.map(function(n,i){
-  var a=2*Math.PI*i/names.length, r=Math.min(W(),H())*0.3;
+  var a=2*Math.PI*i/names.length, r=Math.min(W()-PAD*2,H()-PAD*2)*0.42;
   return{name:n,x:W()/2+r*Math.cos(a),y:H()/2+r*Math.sin(a),vx:0,vy:0,
          color:palette[i%palette.length]};
 });
 var idx={};nodes.forEach(function(n,i){idx[n.name.toLowerCase()]=i;});
+var N=nodes.length;
 
 // Merge directional edges into bidirectional pairs:
 // {key: {a, b, aToB, bToA, total}}
@@ -1003,49 +1010,54 @@ edges.forEach(function(e){
 var pairs=Object.values(pairMap);
 var maxC=1;pairs.forEach(function(p){if(p.total>maxC)maxC=p.total;});
 
+// Scale forces with node count
+var repStr=Math.max(800,N*120);
+var idealDist=Math.max(100,Math.min(200,Math.sqrt(W()*H()/N)*0.7));
+var edgeAlpha=Math.max(0.35,Math.min(0.8,10/pairs.length));
+
 // Force simulation
 function tick(){
   var i,j,n1,n2,dx,dy,d,f;
-  for(i=0;i<nodes.length;i++){
-    for(j=i+1;j<nodes.length;j++){
+  // Repulsion — scales with node count
+  for(i=0;i<N;i++){
+    for(j=i+1;j<N;j++){
       n1=nodes[i];n2=nodes[j];
       dx=n1.x-n2.x;dy=n1.y-n2.y;
       d=Math.sqrt(dx*dx+dy*dy)||1;
-      f=800/(d*d);
+      f=repStr/(d*d);
       n1.vx+=dx/d*f;n1.vy+=dy/d*f;
       n2.vx-=dx/d*f;n2.vy-=dy/d*f;
     }
   }
+  // Attraction along edges
   pairs.forEach(function(p){
     var ai=idx[p.a.toLowerCase()],bi=idx[p.b.toLowerCase()];
     if(ai===undefined||bi===undefined)return;
     n1=nodes[ai];n2=nodes[bi];
     dx=n2.x-n1.x;dy=n2.y-n1.y;
     d=Math.sqrt(dx*dx+dy*dy)||1;
-    f=(d-120)*0.005*Math.sqrt(p.total);
+    f=(d-idealDist)*0.004*Math.sqrt(p.total);
     n1.vx+=dx/d*f;n1.vy+=dy/d*f;
     n2.vx-=dx/d*f;n2.vy-=dy/d*f;
   });
+  // Center gravity — gentle pull
   nodes.forEach(function(n){
-    n.vx+=(W()/2-n.x)*0.001;
-    n.vy+=(H()/2-n.y)*0.001;
-    n.vx*=0.85;n.vy*=0.85;
+    n.vx+=(W()/2-n.x)*0.0008;
+    n.vy+=(H()/2-n.y)*0.0008;
+    n.vx*=0.82;n.vy*=0.82;
     n.x+=n.vx;n.y+=n.vy;
-    n.x=Math.max(40,Math.min(W()-40,n.x));
-    n.y=Math.max(20,Math.min(H()-20,n.y));
+    n.x=Math.max(PAD,Math.min(W()-PAD,n.x));
+    n.y=Math.max(PAD-20,Math.min(H()-PAD+20,n.y));
   });
 }
 
 function draw(){
   ctx.clearRect(0,0,W(),H());
-  // Edges — gradient from source colour to target colour,
-  // midpoint shifted by who mentions whom more
+  // Edges — gradient with directional midpoint
   pairs.forEach(function(p){
     var ai=idx[p.a.toLowerCase()],bi=idx[p.b.toLowerCase()];
     if(ai===undefined||bi===undefined)return;
     var nA=nodes[ai],nB=nodes[bi];
-    // Gradient stop: ratio of aToB / total shifts midpoint toward B
-    // (A's colour extends further when A mentions B more)
     var ratio=p.total>0?p.aToB/p.total:0.5;
     var grad=ctx.createLinearGradient(nA.x,nA.y,nB.x,nB.y);
     grad.addColorStop(0,nA.color);
@@ -1055,26 +1067,24 @@ function draw(){
     ctx.beginPath();ctx.moveTo(nA.x,nA.y);ctx.lineTo(nB.x,nB.y);
     ctx.strokeStyle=grad;
     ctx.lineWidth=Math.max(1.5,Math.min(8,p.total/maxC*8));
-    ctx.globalAlpha=0.8;ctx.stroke();ctx.globalAlpha=1;
+    ctx.globalAlpha=edgeAlpha;ctx.stroke();ctx.globalAlpha=1;
   });
-  // Nodes — small dot + label box
+  // Nodes — dot + label box
   var cs=getComputedStyle(document.body);
   var textCol=cs.getPropertyValue("--text").trim();
   var bgCol=cs.getPropertyValue("--bg2").trim();
   var borderCol=cs.getPropertyValue("--border").trim();
-  ctx.font="12px 'Segoe UI',Tahoma,sans-serif";
+  ctx.font="11px 'Segoe UI',Tahoma,sans-serif";
   nodes.forEach(function(n){
-    // Dot at node position
     ctx.beginPath();ctx.arc(n.x,n.y,4,0,Math.PI*2);
     ctx.fillStyle=n.color;ctx.fill();
     ctx.strokeStyle=borderCol;ctx.lineWidth=1;ctx.stroke();
-    // Label box
-    var w=ctx.measureText(n.name).width+10;
-    var lx=n.x-w/2, ly=n.y-22;
+    var w=ctx.measureText(n.name).width+8;
+    var lx=n.x-w/2, ly=n.y-20;
     ctx.fillStyle=bgCol;ctx.strokeStyle=borderCol;ctx.lineWidth=1;
-    ctx.beginPath();ctx.roundRect(lx,ly,w,16,3);ctx.fill();ctx.stroke();
+    ctx.beginPath();ctx.roundRect(lx,ly,w,15,3);ctx.fill();ctx.stroke();
     ctx.fillStyle=textCol;ctx.textAlign="center";ctx.textBaseline="middle";
-    ctx.fillText(n.name,n.x,ly+8);
+    ctx.fillText(n.name,n.x,ly+7.5);
   });
 }
 
@@ -1082,9 +1092,9 @@ function draw(){
 var dragging=null,dragOff={x:0,y:0};
 function getPos(ev){var r=canvas.getBoundingClientRect();return{x:ev.clientX-r.left,y:ev.clientY-r.top};}
 function hitNode(p){
-  for(var i=0;i<nodes.length;i++){
-    var n=nodes[i],w=ctx.measureText(n.name).width+10;
-    if(p.x>=n.x-w/2&&p.x<=n.x+w/2&&p.y>=n.y-22&&p.y<=n.y+4)return i;
+  for(var i=0;i<N;i++){
+    var n=nodes[i],w=ctx.measureText(n.name).width+8;
+    if(p.x>=n.x-w/2&&p.x<=n.x+w/2&&p.y>=n.y-20&&p.y<=n.y+4)return i;
   }return-1;
 }
 canvas.addEventListener("mousedown",function(ev){
@@ -1108,12 +1118,13 @@ canvas.addEventListener("touchmove",function(ev){
 },{passive:false});
 canvas.addEventListener("touchend",function(){dragging=null;});
 
-// Animation loop
+// Animation loop — more frames for larger graphs
+var maxFrames=Math.max(300,N*20);
 var frame=0;
 function loop(){
   if(dragging===null)tick();
   draw();
-  if(++frame<300||dragging!==null)requestAnimationFrame(loop);
+  if(++frame<maxFrames||dragging!==null)requestAnimationFrame(loop);
   else setTimeout(loop,200);
 }
 loop();
