@@ -255,6 +255,7 @@ def build_page(network: str, channel: str, period: int, config: dict,
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{channel} @ {network} — {title}</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
 <style>
 :root {{
   --bg:      #0d0d1a;
@@ -963,95 +964,75 @@ b {{ color: var(--cyan); }}
         _rm_height = max(400, min(900, len(_rm_nodes) * 28))
         section(t("Relationship map", lang))
         h(f'<canvas id="relationMap" style="width:100%;height:{_rm_height}px;background:var(--bg2);'
-          f'border:1px solid var(--border);border-radius:8px;cursor:grab"></canvas>')
+          f'border:1px solid var(--border);border-radius:8px"></canvas>')
         h(f'<script>!function(){{')
-        h(f'var edges={json.dumps(interactions)};')
-        h(f'var canvas=document.getElementById("relationMap");')
-        h(f'var ctx=canvas.getContext("2d");')
+        h(f'var rawEdges={json.dumps(interactions)};')
         h("""
+var canvas=document.getElementById("relationMap");
+var ctx=canvas.getContext("2d");
 var dpr=window.devicePixelRatio||1;
 function resize(){
   var r=canvas.getBoundingClientRect();
   canvas.width=r.width*dpr;canvas.height=r.height*dpr;
   ctx.setTransform(dpr,0,0,dpr,0,0);
 }
-resize();window.addEventListener("resize",resize);
+resize();
 var W=()=>canvas.width/dpr, H=()=>canvas.height/dpr;
 
-// Assign a unique colour to each nick
-var palette=["#f7768e","#9ece6a","#7aa2f7","#e0af68","#bb9af7",
-  "#7dcfff","#ff9e64","#73daca","#c53b53","#41a6b5",
-  "#d18616","#6183bb","#a9b1d6","#56b6c2","#c678dd"];
-
-// Build nodes from edges
-var nodeSet={};
-edges.forEach(function(e){nodeSet[e.source]=1;nodeSet[e.target]=1;});
-var names=Object.keys(nodeSet);
-var PAD=60;
+// Build nodes
+var nodeMap={};
+rawEdges.forEach(function(e){nodeMap[e.source]=1;nodeMap[e.target]=1;});
+var names=Object.keys(nodeMap);
+// Generate unique colours — evenly spaced hues with varied saturation/lightness
+function hslColor(i,total){
+  var hue=(i*360/total)%360;
+  var sat=65+15*((i%3)-1);
+  var lit=55+10*((i%2)?1:-1);
+  return"hsl("+hue+","+sat+"%,"+lit+"%)";
+}
 var nodes=names.map(function(n,i){
-  var a=2*Math.PI*i/names.length, r=Math.min(W()-PAD*2,H()-PAD*2)*0.42;
-  return{name:n,x:W()/2+r*Math.cos(a),y:H()/2+r*Math.sin(a),vx:0,vy:0,
-         color:palette[i%palette.length]};
+  return{id:n,color:hslColor(i,names.length)};
 });
-var idx={};nodes.forEach(function(n,i){idx[n.name.toLowerCase()]=i;});
-var N=nodes.length;
+var colorById={};nodes.forEach(function(n){colorById[n.id.toLowerCase()]=n.color;});
 
-// Merge directional edges into bidirectional pairs:
-// {key: {a, b, aToB, bToA, total}}
+// Merge directional edges into bidirectional pairs
 var pairMap={};
-edges.forEach(function(e){
-  var sL=e.source.toLowerCase(), tL=e.target.toLowerCase();
+rawEdges.forEach(function(e){
+  var sL=e.source.toLowerCase(),tL=e.target.toLowerCase();
   var key=sL<tL?sL+"|"+tL:tL+"|"+sL;
-  if(!pairMap[key]) pairMap[key]={a:sL<tL?e.source:e.target, b:sL<tL?e.target:e.source, aToB:0, bToA:0, total:0};
+  if(!pairMap[key])pairMap[key]={source:sL<tL?e.source:e.target,target:sL<tL?e.target:e.source,aToB:0,bToA:0,total:0};
   var p=pairMap[key];
-  if(sL===p.a.toLowerCase()) p.aToB+=e.count; else p.bToA+=e.count;
+  if(sL===p.source.toLowerCase())p.aToB+=e.count;else p.bToA+=e.count;
   p.total=p.aToB+p.bToA;
 });
-var pairs=Object.values(pairMap);
-var maxC=1;pairs.forEach(function(p){if(p.total>maxC)maxC=p.total;});
+var links=Object.values(pairMap);
+var maxC=1;links.forEach(function(l){if(l.total>maxC)maxC=l.total;});
 
-// Scale forces with node count
-var repStr=Math.max(800,N*120);
-var idealDist=Math.max(100,Math.min(200,Math.sqrt(W()*H()/N)*0.7));
-var edgeAlpha=Math.max(0.35,Math.min(0.8,10/pairs.length));
+// Pre-compute rendering props
+links.forEach(function(l){
+  l._w=Math.max(1.5,Math.min(8,l.total/maxC*8));
+  l._ratio=l.total>0?l.aToB/l.total:0.5;
+});
+var edgeAlpha=Math.max(0.35,Math.min(0.8,10/links.length));
 
-// Force simulation
-function tick(){
-  var i,j,n1,n2,dx,dy,d,f;
-  // Repulsion — scales with node count
-  for(i=0;i<N;i++){
-    for(j=i+1;j<N;j++){
-      n1=nodes[i];n2=nodes[j];
-      dx=n1.x-n2.x;dy=n1.y-n2.y;
-      d=Math.sqrt(dx*dx+dy*dy)||1;
-      f=repStr/(d*d);
-      n1.vx+=dx/d*f;n1.vy+=dy/d*f;
-      n2.vx-=dx/d*f;n2.vy-=dy/d*f;
-    }
-  }
-  // Attraction along edges
-  pairs.forEach(function(p){
-    var ai=idx[p.a.toLowerCase()],bi=idx[p.b.toLowerCase()];
-    if(ai===undefined||bi===undefined)return;
-    n1=nodes[ai];n2=nodes[bi];
-    dx=n2.x-n1.x;dy=n2.y-n1.y;
-    d=Math.sqrt(dx*dx+dy*dy)||1;
-    f=(d-idealDist)*0.004*Math.sqrt(p.total);
-    n1.vx+=dx/d*f;n1.vy+=dy/d*f;
-    n2.vx-=dx/d*f;n2.vy-=dy/d*f;
+// d3 force simulation
+var N=nodes.length;
+var PAD=60;
+var sim=d3.forceSimulation(nodes)
+  .force("link",d3.forceLink(links).id(function(d){return d.id;}).distance(Math.max(80,Math.min(180,Math.sqrt(W()*H()/N)*0.6))))
+  .force("charge",d3.forceManyBody().strength(-Math.max(200,N*30)))
+  .force("center",d3.forceCenter(W()/2,H()/2))
+  .force("collide",d3.forceCollide(35))
+  .on("tick",function(){
+    // Clamp nodes within canvas bounds
+    nodes.forEach(function(n){
+      n.x=Math.max(PAD,Math.min(W()-PAD,n.x));
+      n.y=Math.max(PAD,Math.min(H()-PAD,n.y));
+    });
+    draw();
   });
-  // Center gravity — gentle pull
-  nodes.forEach(function(n){
-    n.vx+=(W()/2-n.x)*0.0008;
-    n.vy+=(H()/2-n.y)*0.0008;
-    n.vx*=0.82;n.vy*=0.82;
-    n.x+=n.vx;n.y+=n.vy;
-    n.x=Math.max(PAD,Math.min(W()-PAD,n.x));
-    n.y=Math.max(PAD-20,Math.min(H()-PAD+20,n.y));
-  });
-}
 
-// Cache theme colours (re-read only on theme toggle)
+// Cache theme colours
 var cs=getComputedStyle(document.body);
 var textCol=cs.getPropertyValue("--text").trim();
 var bgCol=cs.getPropertyValue("--bg2").trim();
@@ -1066,87 +1047,75 @@ if(themeBtn)themeBtn.addEventListener("click",function(){
   },50);
 });
 
-// Pre-compute edge widths and ratios
-pairs.forEach(function(p){
-  p._w=Math.max(1.5,Math.min(8,p.total/maxC*8));
-  p._ratio=p.total>0?p.aToB/p.total:0.5;
-  p._ai=idx[p.a.toLowerCase()];p._bi=idx[p.b.toLowerCase()];
-});
-
 // Pre-measure label widths
 ctx.font="11px 'Segoe UI',Tahoma,sans-serif";
-nodes.forEach(function(n){n._lw=ctx.measureText(n.name).width+8;});
+nodes.forEach(function(n){n._lw=ctx.measureText(n.id).width+8;});
 
 function draw(){
   ctx.clearRect(0,0,W(),H());
-  // Edges — use simple two-segment line instead of gradient for performance
+  // Edges — gradient from source to target colour, midpoint shifted by ratio
   ctx.globalAlpha=edgeAlpha;
-  pairs.forEach(function(p){
-    if(p._ai===undefined||p._bi===undefined)return;
-    var nA=nodes[p._ai],nB=nodes[p._bi];
-    var mx=nA.x+(nB.x-nA.x)*p._ratio, my=nA.y+(nB.y-nA.y)*p._ratio;
-    ctx.lineWidth=p._w;
-    ctx.strokeStyle=nA.color;
-    ctx.beginPath();ctx.moveTo(nA.x,nA.y);ctx.lineTo(mx,my);ctx.stroke();
-    ctx.strokeStyle=nB.color;
-    ctx.beginPath();ctx.moveTo(mx,my);ctx.lineTo(nB.x,nB.y);ctx.stroke();
+  links.forEach(function(l){
+    var s=l.source,t=l.target;
+    var grad=ctx.createLinearGradient(s.x,s.y,t.x,t.y);
+    grad.addColorStop(0,s.color);
+    grad.addColorStop(Math.max(0,l._ratio-0.1),s.color);
+    grad.addColorStop(Math.min(1,l._ratio+0.1),t.color);
+    grad.addColorStop(1,t.color);
+    ctx.lineWidth=l._w;
+    ctx.strokeStyle=grad;
+    ctx.beginPath();ctx.moveTo(s.x,s.y);ctx.lineTo(t.x,t.y);ctx.stroke();
   });
   ctx.globalAlpha=1;
-  // Nodes — dot + label box
+  // Nodes
   ctx.font="11px 'Segoe UI',Tahoma,sans-serif";
   ctx.textAlign="center";ctx.textBaseline="middle";
   nodes.forEach(function(n){
     ctx.beginPath();ctx.arc(n.x,n.y,4,0,Math.PI*2);
     ctx.fillStyle=n.color;ctx.fill();
     ctx.strokeStyle=borderCol;ctx.lineWidth=1;ctx.stroke();
-    var lx=n.x-n._lw/2, ly=n.y-20;
+    var lx=n.x-n._lw/2,ly=n.y-20;
     ctx.fillStyle=bgCol;ctx.strokeStyle=borderCol;ctx.lineWidth=1;
     ctx.beginPath();ctx.roundRect(lx,ly,n._lw,15,3);ctx.fill();ctx.stroke();
     ctx.fillStyle=textCol;
-    ctx.fillText(n.name,n.x,ly+7.5);
+    ctx.fillText(n.id,n.x,ly+7.5);
   });
 }
 
-// Drag support
-var dragging=null,dragOff={x:0,y:0};
-function getPos(ev){var r=canvas.getBoundingClientRect();return{x:ev.clientX-r.left,y:ev.clientY-r.top};}
-function hitNode(p){
-  for(var i=0;i<N;i++){
-    var n=nodes[i],w=ctx.measureText(n.name).width+8;
-    if(p.x>=n.x-w/2&&p.x<=n.x+w/2&&p.y>=n.y-20&&p.y<=n.y+4)return i;
-  }return-1;
-}
-canvas.addEventListener("mousedown",function(ev){
-  var p=getPos(ev),i=hitNode(p);
-  if(i>=0){dragging=i;dragOff.x=nodes[i].x-p.x;dragOff.y=nodes[i].y-p.y;canvas.style.cursor="grabbing";}
-});
-canvas.addEventListener("mousemove",function(ev){
-  if(dragging!==null){var p=getPos(ev);nodes[dragging].x=p.x+dragOff.x;nodes[dragging].y=p.y+dragOff.y;nodes[dragging].vx=0;nodes[dragging].vy=0;}
-  else{var p2=getPos(ev);canvas.style.cursor=hitNode(p2)>=0?"pointer":"grab";}
-});
-canvas.addEventListener("mouseup",function(){dragging=null;canvas.style.cursor="grab";});
-canvas.addEventListener("mouseleave",function(){dragging=null;canvas.style.cursor="grab";});
+// Drag via d3.drag — use d3.pointer for correct canvas coordinates
+var hitRadius=25;
+d3.select(canvas).call(d3.drag()
+  .subject(function(event){
+    var p=d3.pointer(event,canvas);
+    for(var i=0;i<N;i++){
+      var n=nodes[i],dx=p[0]-n.x,dy=p[1]-n.y;
+      if(dx*dx+dy*dy<hitRadius*hitRadius)return n;
+    }
+  })
+  .on("start",function(event){
+    if(!event.active)sim.alphaTarget(0.3).restart();
+    var p=d3.pointer(event,canvas);
+    event.subject.fx=p[0];event.subject.fy=p[1];
+    canvas.style.cursor="grabbing";
+  })
+  .on("drag",function(event){
+    var p=d3.pointer(event,canvas);
+    event.subject.fx=p[0];event.subject.fy=p[1];
+  })
+  .on("end",function(event){
+    if(!event.active)sim.alphaTarget(0);
+    event.subject.fx=null;event.subject.fy=null;
+    canvas.style.cursor="grab";
+  })
+);
+canvas.style.cursor="grab";
 
-// Touch support
-canvas.addEventListener("touchstart",function(ev){
-  ev.preventDefault();var t=ev.touches[0],p=getPos(t),i=hitNode(p);
-  if(i>=0){dragging=i;dragOff.x=nodes[i].x-p.x;dragOff.y=nodes[i].y-p.y;}
-},{passive:false});
-canvas.addEventListener("touchmove",function(ev){
-  ev.preventDefault();if(dragging!==null){var t=ev.touches[0],p=getPos(t);nodes[dragging].x=p.x+dragOff.x;nodes[dragging].y=p.y+dragOff.y;nodes[dragging].vx=0;nodes[dragging].vy=0;}
-},{passive:false});
-canvas.addEventListener("touchend",function(){dragging=null;});
-
-// Animation loop — more frames for larger graphs
-var maxFrames=Math.max(300,N*20);
-var frame=0;
-function loop(){
-  if(dragging===null)tick();
-  draw();
-  if(++frame<maxFrames||dragging!==null)requestAnimationFrame(loop);
-  else setTimeout(loop,200);
-}
-loop();
+// Handle resize
+window.addEventListener("resize",function(){
+  resize();
+  sim.force("center",d3.forceCenter(W()/2,H()/2));
+  sim.alpha(0.3).restart();
+});
 """)
         h('}();</script>')
 

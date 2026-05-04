@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "mcp__serena__write_memory"
+      "mcp__serena__write_memory",
+      "mcp__context7__resolve-library-id",
+      "WebSearch",
+      "mcp__context7__query-docs"
     ]
   }
 }
