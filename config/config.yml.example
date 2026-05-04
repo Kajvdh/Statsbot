@@ -134,6 +134,7 @@ pisg:
   ShowMru: true                # most referenced URLs (pisg: ShowMru)
   ShowRelationMap: true          # interactive nick relationship graph
   RelationMapMinCount: 2         # minimum interactions to show an edge
+  ShowNavigation: true           # back button and sibling channel links in header
   ShowLegend: true             # page legend/footer (pisg: ShowLegend)
 
   # History limits
